@@ -15,16 +15,19 @@ type Config struct {
 	TokenTTL    time.Duration
 	// HeartbeatTTL is how long a host stays "online" after its last heartbeat.
 	HeartbeatTTL time.Duration
+	// SessionStartTimeout fails a matched session that has not started streaming by then.
+	SessionStartTimeout time.Duration
 }
 
 func Load() (Config, error) {
 	c := Config{
-		Addr:         getenv("FOGPLAY_ADDR", ":8080"),
-		DatabaseURL:  os.Getenv("DATABASE_URL"),
-		RedisURL:     getenv("REDIS_URL", "redis://localhost:6379/0"),
-		JWTSecret:    []byte(os.Getenv("JWT_SECRET")),
-		TokenTTL:     24 * time.Hour,
-		HeartbeatTTL: 30 * time.Second,
+		Addr:                getenv("FOGPLAY_ADDR", ":8080"),
+		DatabaseURL:         os.Getenv("DATABASE_URL"),
+		RedisURL:            getenv("REDIS_URL", "redis://localhost:6379/0"),
+		JWTSecret:           []byte(os.Getenv("JWT_SECRET")),
+		TokenTTL:            24 * time.Hour,
+		HeartbeatTTL:        30 * time.Second,
+		SessionStartTimeout: 60 * time.Second,
 	}
 	if v := os.Getenv("HEARTBEAT_TTL"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -32,6 +35,13 @@ func Load() (Config, error) {
 			return c, fmt.Errorf("HEARTBEAT_TTL: %w", err)
 		}
 		c.HeartbeatTTL = d
+	}
+	if v := os.Getenv("SESSION_START_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return c, fmt.Errorf("SESSION_START_TIMEOUT: must be a positive duration")
+		}
+		c.SessionStartTimeout = d
 	}
 	if c.DatabaseURL == "" {
 		return c, fmt.Errorf("DATABASE_URL is required")

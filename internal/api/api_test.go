@@ -22,6 +22,12 @@ import (
 // TEST_REDIS_URL (see docker-compose.yml). The tests wipe both.
 func newTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	srv, _ := newTestEnv(t)
+	return srv
+}
+
+func newTestEnv(t *testing.T) (*httptest.Server, *Server) {
+	t.Helper()
 	dbURL, redisURL := os.Getenv("TEST_DATABASE_URL"), os.Getenv("TEST_REDIS_URL")
 	if dbURL == "" || redisURL == "" {
 		t.Skip("TEST_DATABASE_URL and TEST_REDIS_URL not set")
@@ -35,7 +41,7 @@ func newTestServer(t *testing.T) *httptest.Server {
 	if err := db.Migrate(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `TRUNCATE users, hosts, games, host_games CASCADE`); err != nil {
+	if _, err := pool.Exec(ctx, `TRUNCATE users, hosts, games, host_games, sessions CASCADE`); err != nil {
 		t.Fatal(err)
 	}
 	pres, err := presence.NewRedis(redisURL, time.Minute)
@@ -46,9 +52,10 @@ func newTestServer(t *testing.T) *httptest.Server {
 
 	tokens := auth.NewIssuer([]byte("0123456789abcdef0123456789abcdef"), time.Hour)
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	srv := httptest.NewServer(New(store.New(pool), pres, tokens, log).Handler())
+	api := New(store.New(pool), pres, tokens, log)
+	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
-	return srv
+	return srv, api
 }
 
 func call(t *testing.T, srv *httptest.Server, method, path, token string, body any, out any) int {

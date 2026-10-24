@@ -21,6 +21,7 @@ import (
 // Presence is the live host status store (Redis in production).
 type Presence interface {
 	Set(ctx context.Context, hostID, status string) error
+	Update(ctx context.Context, hostID, status string) error
 	Statuses(ctx context.Context, hostIDs []string) (map[string]string, error)
 	Ping(ctx context.Context) error
 }
@@ -52,6 +53,12 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/me", s.me)
 			r.Get("/games", s.listGames)
 
+			r.Post("/sessions", s.createSession)
+			r.Get("/sessions", s.listSessions)
+			r.Get("/sessions/{id}", s.getSession)
+			r.Put("/sessions/{id}/state", s.updateSessionState)
+			r.Delete("/sessions/{id}", s.endSession)
+
 			r.Group(func(r chi.Router) {
 				r.Use(requireRole("host", "both"))
 				r.Post("/hosts", s.createHost)
@@ -59,6 +66,7 @@ func (s *Server) Handler() http.Handler {
 				r.Get("/hosts/{id}", s.getHost)
 				r.Put("/hosts/{id}/games", s.replaceHostGames)
 				r.Put("/hosts/{id}/status", s.heartbeat)
+				r.Get("/hosts/{id}/session", s.hostSession)
 			})
 		})
 	})
