@@ -1,6 +1,3 @@
-// Command fogplay-agent runs on a host PC next to Sunshine. It registers the
-// PC with the Fog Play server, keeps it online, and lets players stream from
-// it with Moonlight.
 package main
 
 import (
@@ -11,16 +8,16 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 
 	"github.com/estetsenko/fog-play/internal/agent"
 	"github.com/estetsenko/fog-play/internal/cli"
 	"github.com/estetsenko/fog-play/internal/client"
 )
 
-type config struct {
+// hostConfig is the config for "fogplay host", which shares this PC's games
+// through the local Sunshine.
+type hostConfig struct {
 	Server   string `json:"server"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -39,7 +36,7 @@ type config struct {
 	HostID string `json:"host_id"`
 }
 
-const example = `{
+const hostExample = `{
   "server": "http://192.168.1.20:8080",
   "email": "host@example.com",
   "password": "change-me-please",
@@ -53,11 +50,14 @@ const example = `{
   "sunshine_password": "your-sunshine-web-ui-password"
 }`
 
-func main() {
+// host registers this PC with the server, keeps it online, and lets players
+// stream from it with Moonlight until interrupted.
+func host(ctx context.Context, args []string) {
 	defDir, _ := cli.ConfigDir()
-	path := flag.String("config", filepath.Join(defDir, "agent.json"), "agent config file")
-	debug := flag.Bool("debug", false, "verbose logs")
-	flag.Parse()
+	fs := flag.NewFlagSet("host", flag.ExitOnError)
+	path := fs.String("config", filepath.Join(defDir, "host.json"), "host config file")
+	debug := fs.Bool("debug", false, "verbose logs")
+	fs.Parse(args)
 
 	level := slog.LevelInfo
 	if *debug {
@@ -65,16 +65,16 @@ func main() {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	var cfg config
+	var cfg hostConfig
 	if err := cli.LoadJSON(*path, &cfg); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			fmt.Fprintf(os.Stderr, "No config at %s. Create it like this:\n%s\n", *path, example)
+			fmt.Fprintf(os.Stderr, "No host config at %s. Create it like this:\n%s\n", *path, hostExample)
 			os.Exit(2)
 		}
 		fatal(err)
 	}
 	if cfg.Server == "" || cfg.Email == "" || cfg.Password == "" {
-		fatal(errors.New("server, email and password are required in the config"))
+		fatal(errors.New("server, email and password are required in the host config"))
 	}
 	if cfg.Name == "" {
 		cfg.Name, _ = os.Hostname()
@@ -89,11 +89,8 @@ func main() {
 		cfg.SunshineURL = "https://localhost:47990"
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
 	api := client.New(cfg.Server, "")
-	if err := signIn(ctx, api, cfg, log); err != nil {
+	if err := hostSignIn(ctx, api, cfg, log); err != nil {
 		fatal(err)
 	}
 
@@ -117,8 +114,8 @@ func main() {
 	}
 }
 
-// signIn logs in, creating the host account on first run.
-func signIn(ctx context.Context, api *client.Client, cfg config, log *slog.Logger) error {
+// hostSignIn logs in, creating the host account on first run.
+func hostSignIn(ctx context.Context, api *client.Client, cfg hostConfig, log *slog.Logger) error {
 	err := api.Login(ctx, cfg.Email, cfg.Password)
 	if !client.IsStatus(err, http.StatusUnauthorized) {
 		return err
@@ -131,9 +128,4 @@ func signIn(ctx context.Context, api *client.Client, cfg config, log *slog.Logge
 	}
 	log.Info("created host account", "email", cfg.Email)
 	return nil
-}
-
-func fatal(err error) {
-	fmt.Fprintln(os.Stderr, "fogplay-agent:", err)
-	os.Exit(1)
 }
