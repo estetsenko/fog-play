@@ -28,5 +28,6 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - run: sudo apt-get update -q && sudo apt-get install -y -q ffmpeg
       - run: go vet ./...
       - run: make test

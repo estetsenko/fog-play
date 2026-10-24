@@ -1,17 +1,19 @@
 # Third-party programs
 
-fogplay downloads these programs from their official GitHub releases the first
-time they're needed, and runs them as separate processes. They aren't
-compiled into fogplay, and fogplay talks to them only through their command
-line and HTTP interfaces.
+`fogplay host` captures and encodes the screen with FFmpeg, run as a separate
+process. It isn't compiled into fogplay; fogplay only passes it a command line
+and reads the encoded video from its output.
 
 | Program | Used by | License | Source |
 | --- | --- | --- | --- |
-| Sunshine | `fogplay host` streams the PC with it | GPL-3.0 | https://github.com/LizardByte/Sunshine |
-| Moonlight (moonlight-qt) | `fogplay play` shows the stream with it | GPL-3.0 | https://github.com/moonlight-stream/moonlight-qt |
+| FFmpeg (BtbN Windows build, GPL variant) | `fogplay host` on Windows, downloaded on first use | GPL-3.0 | https://github.com/BtbN/FFmpeg-Builds, https://ffmpeg.org |
 
-Each download is the unmodified upstream release. The full source of each version is
-available from the links above, under the release tag fogplay downloaded
-(recorded in `installed.json` in the cache folder).
+On Linux, fogplay uses the FFmpeg from your package manager. If `ffmpeg` is on
+PATH it is used on any OS.
 
-Our own WebRTC streaming engine, which replaces both, is on the roadmap.
+The download is the unmodified upstream build (`ffmpeg-master-latest-win64-gpl.zip`).
+Its full source is available from the links above; the release fogplay
+downloaded is recorded in `installed.json` in the cache folder.
+
+Go libraries compiled into fogplay are listed in `go.mod`; the WebRTC stack is
+[Pion](https://github.com/pion/webrtc) (MIT).

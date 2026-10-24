@@ -5,7 +5,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -52,15 +51,4 @@ func Prompt(label string, secret bool) (string, error) {
 	}
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	return strings.TrimSpace(line), err
-}
-
-// LocalIP returns the address of the interface this machine uses for
-// outbound traffic, which is the one other PCs on the LAN can reach.
-func LocalIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80") // no packets are sent
-	if err != nil {
-		return ""
-	}
-	defer conn.Close()
-	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }

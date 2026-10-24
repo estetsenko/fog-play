@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fog Play</title>
+<style>
+  :root { color-scheme: dark; --bar: rgba(20, 22, 26, .85); --text: #e8e8ea; --muted: #9a9ca3; --accent: #4f8cff; --danger: #e5484d; }
+  html, body { margin: 0; height: 100%; background: #000; color: var(--text); font: 14px/1.4 system-ui, sans-serif; overflow: hidden; }
+  #bar { position: fixed; inset: 0 0 auto 0; display: flex; gap: 12px; align-items: center; padding: 8px 12px; background: var(--bar); z-index: 2; flex-wrap: wrap; }
+  #status { font-weight: 600; }
+  #stats { color: var(--muted); font-variant-numeric: tabular-nums; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  button { font: inherit; color: var(--text); background: #2a2d34; border: 0; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover { background: #363a43; }
+  #game { background: var(--accent); }
+  #end { background: var(--danger); }
+  video { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: contain; outline: none; cursor: default; }
+  :fullscreen #bar { display: none; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="status">Connecting…</span>
+  <span id="stats"></span>
+  <button id="game" title="Fullscreen, mouse and keyboard captured. Hold Esc to leave.">Game mode</button>
+  <button id="end">End session</button>
+</div>
+<video id="video" autoplay playsinline muted tabindex="0"></video>
+<script src="/play.js"></script>
+</body>
+</html>

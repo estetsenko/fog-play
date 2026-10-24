@@ -1,23 +1,22 @@
 // Package agent runs on a host PC. It keeps the PC registered and online,
-// picks up sessions booked on it, pairs the player's Moonlight with the local
-// Sunshine, and unpairs everyone when the session ends.
+// picks up sessions booked on it, starts the booked game, and streams to the
+// player until the session ends.
 package agent
 
 import (
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/estetsenko/fog-play/internal/client"
-	"github.com/estetsenko/fog-play/internal/signal"
 	"github.com/estetsenko/fog-play/internal/store"
+	"github.com/estetsenko/fog-play/internal/stream"
 )
 
 type Config struct {
@@ -26,41 +25,47 @@ type Config struct {
 	Region string
 	GPU    string
 	CPU    string
-	// Address is what the player's Moonlight connects to (IP or name, optional :port).
-	Address string
-	// Games used when Sunshine's app list cannot be read.
-	FallbackGames []string
+	// Apps this host offers besides the desktop.
+	Apps []App
 
 	PollInterval      time.Duration // how often to check for a booking
 	HeartbeatInterval time.Duration
-	PairTimeout       time.Duration // how long to keep retrying a PIN
+}
+
+// App is a game the host offers. Cmd, if set, is started when a session for
+// it begins and stopped when the session ends.
+type App struct {
+	Name string `json:"name"`
+	Cmd  string `json:"cmd,omitempty"`
+}
+
+// Streamer streams one session to its player until ctx ends.
+type Streamer interface {
+	Serve(ctx context.Context, sig stream.Signal) error
 }
 
 type Agent struct {
 	cfg      Config
 	api      *client.Client
-	sunshine Sunshine
+	streamer Streamer
 	log      *slog.Logger
 
-	apps map[string]string // game slug -> Sunshine app name
+	apps map[string]App // game slug -> app
 }
 
-func New(cfg Config, api *client.Client, sun Sunshine, log *slog.Logger) *Agent {
+func New(cfg Config, api *client.Client, st Streamer, log *slog.Logger) *Agent {
 	if cfg.PollInterval == 0 {
 		cfg.PollInterval = 2 * time.Second
 	}
 	if cfg.HeartbeatInterval == 0 {
 		cfg.HeartbeatInterval = 10 * time.Second
 	}
-	if cfg.PairTimeout == 0 {
-		cfg.PairTimeout = 90 * time.Second
-	}
-	return &Agent{cfg: cfg, api: api, sunshine: sun, log: log}
+	return &Agent{cfg: cfg, api: api, streamer: st, log: log}
 }
 
 var nonSlug = regexp.MustCompile(`[^a-z0-9]+`)
 
-// Slug turns a Sunshine app name into a catalog slug: "Steam Big Picture" -> "steam-big-picture".
+// Slug turns an app name into a catalog slug: "Steam Big Picture" -> "steam-big-picture".
 func Slug(name string) string {
 	s := strings.Trim(nonSlug.ReplaceAllString(strings.ToLower(name), "-"), "-")
 	if len(s) > 64 {
@@ -69,31 +74,26 @@ func Slug(name string) string {
 	return s
 }
 
-func (a *Agent) loadGames(ctx context.Context) []store.Game {
-	names, err := a.sunshine.Apps(ctx)
-	if err != nil {
-		a.log.Warn("cannot read Sunshine apps, using configured games", "err", err)
-		names = a.cfg.FallbackGames
-	}
-	a.apps = map[string]string{}
+func (a *Agent) loadGames() []store.Game {
+	a.apps = map[string]App{}
 	var games []store.Game
-	for _, n := range names {
-		slug := Slug(n)
-		if slug == "" || a.apps[slug] != "" {
+	for _, app := range append([]App{{Name: "Desktop"}}, a.cfg.Apps...) {
+		slug := Slug(app.Name)
+		if slug == "" {
 			continue
 		}
-		a.apps[slug] = n
-		games = append(games, store.Game{Slug: slug, Title: n})
+		if _, dup := a.apps[slug]; dup {
+			continue
+		}
+		a.apps[slug] = app
+		games = append(games, store.Game{Slug: slug, Title: app.Name})
 	}
 	return games
 }
 
 // Setup registers the host if needed and syncs its games. It returns the host id.
 func (a *Agent) Setup(ctx context.Context) (string, error) {
-	games := a.loadGames(ctx)
-	if len(games) == 0 {
-		return "", errors.New("no games: add apps in Sunshine or set games in the agent config")
-	}
+	games := a.loadGames()
 	if a.cfg.HostID != "" {
 		_, err := a.api.Host(ctx, a.cfg.HostID)
 		if client.IsStatus(err, http.StatusNotFound) {
@@ -132,7 +132,7 @@ func (a *Agent) Run(ctx context.Context) error {
 		}
 	}
 	beat()
-	a.log.Info("online, waiting for players", "address", a.cfg.Address)
+	a.log.Info("online, waiting for players")
 
 	// Heartbeats keep going while a session is being served.
 	go func() {
@@ -181,15 +181,7 @@ func (a *Agent) Run(ctx context.Context) error {
 func (a *Agent) serve(ctx context.Context, sess store.Session) {
 	log := a.log.With("session_id", sess.ID, "game", sess.Game)
 	log.Info("session booked")
-	defer func() {
-		// Revoke the player's pairing so they cannot reconnect directly later.
-		cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := a.sunshine.UnpairAll(cctx); err != nil {
-			log.Error("unpair Moonlight clients failed; remove them in the Sunshine web UI", "err", err)
-		}
-		log.Info("session over")
-	}()
+	defer log.Info("session over")
 
 	app, ok := a.apps[sess.Game]
 	if !ok {
@@ -208,7 +200,7 @@ func (a *Agent) serve(ctx context.Context, sess store.Session) {
 		return
 	}
 	defer sig.Close()
-	// Stop pairing attempts as soon as the session ends.
+	// The relay closes when the session ends, from either side or the reaper.
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -218,57 +210,69 @@ func (a *Agent) serve(ctx context.Context, sess store.Session) {
 		case <-ctx.Done():
 		}
 	}()
-	if err := sig.Send(ctx, signal.TypeHostInfo, signal.HostInfo{Address: a.cfg.Address, App: app}); err != nil {
-		log.Error("send host info failed", "err", err)
-		return
+
+	if app.Cmd != "" {
+		game, err := startApp(app.Cmd)
+		if err != nil {
+			log.Error("start game failed", "cmd", app.Cmd, "err", err)
+			a.fail(sess.ID, "host could not start the game")
+			return
+		}
+		log.Info("game started", "pid", game.Process.Pid)
+		defer stopApp(game)
 	}
 
-	// The relay closes when the session ends, from either side or the reaper.
-	for {
-		m, err := sig.Receive(ctx)
-		if err != nil {
-			return
-		}
-		if m.Type != signal.TypePairPIN {
-			continue
-		}
-		var p signal.PairPIN
-		if json.Unmarshal(m.Data, &p) != nil {
-			continue
-		}
-		res := signal.PairResult{OK: true}
-		if err := a.pair(ctx, p); err != nil {
-			log.Warn("pairing failed", "err", err)
-			res = signal.PairResult{Error: err.Error()}
-		} else {
-			log.Info("Moonlight paired", "client", p.ClientName)
-		}
-		if err := sig.Send(ctx, signal.TypePairResult, res); err != nil {
-			return
-		}
+	if err := a.streamer.Serve(ctx, sig); err != nil {
+		log.Error("stream failed", "err", err)
+		a.fail(sess.ID, "stream failed on the host: "+err.Error())
 	}
 }
 
-// pair keeps offering the PIN to Sunshine until Moonlight's pairing request
-// shows up and is accepted, or PairTimeout passes.
-func (a *Agent) pair(ctx context.Context, p signal.PairPIN) error {
-	ctx, cancel := context.WithTimeout(ctx, a.cfg.PairTimeout)
+func (a *Agent) fail(sessionID, reason string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	for {
-		ok, err := a.sunshine.SubmitPIN(ctx, p.PIN, p.ClientName)
-		if ok {
-			return nil
-		}
-		if err != nil {
-			a.log.Debug("PIN not accepted yet", "err", err)
-		}
-		select {
-		case <-ctx.Done():
-			if err != nil {
-				return fmt.Errorf("Sunshine did not accept the PIN: %w", err)
+	a.api.SetSessionState(ctx, sessionID, "failed", reason)
+}
+
+// startApp runs a game's command line: an executable path, optionally
+// followed by arguments.
+func startApp(cmdline string) (*exec.Cmd, error) {
+	name, args := splitCommand(cmdline)
+	cmd := exec.Command(name, args...)
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go cmd.Wait()
+	return cmd, nil
+}
+
+func stopApp(cmd *exec.Cmd) {
+	cmd.Process.Kill()
+}
+
+// splitCommand splits a command line on spaces, keeping "quoted parts" together.
+func splitCommand(s string) (string, []string) {
+	var parts []string
+	var cur strings.Builder
+	quoted := false
+	for _, r := range s {
+		switch {
+		case r == '"':
+			quoted = !quoted
+		case r == ' ' && !quoted:
+			if cur.Len() > 0 {
+				parts = append(parts, cur.String())
+				cur.Reset()
 			}
-			return errors.New("Sunshine did not see a pairing request from Moonlight in time")
-		case <-time.After(time.Second):
+		default:
+			cur.WriteRune(r)
 		}
 	}
+	if cur.Len() > 0 {
+		parts = append(parts, cur.String())
+	}
+	if len(parts) == 0 {
+		return "", nil
+	}
+	return parts[0], parts[1:]
 }

@@ -14,32 +14,31 @@ import (
 	"github.com/estetsenko/fog-play/internal/cli"
 	"github.com/estetsenko/fog-play/internal/client"
 	"github.com/estetsenko/fog-play/internal/fetch"
+	"github.com/estetsenko/fog-play/internal/stream"
 )
 
-// hostConfig is the config for "fogplay host", which shares this PC's games
-// through the local Sunshine.
+// hostConfig is the config for "fogplay host", which streams this PC's games
+// to players.
 type hostConfig struct {
 	Server   string `json:"server"`
 	Email    string `json:"email"`
 	Password string `json:"password"`
 
-	Name    string `json:"name"`
-	Region  string `json:"region"`
-	GPU     string `json:"gpu"`
-	CPU     string `json:"cpu"`
-	Address string `json:"address"`
+	Name   string `json:"name"`
+	Region string `json:"region"`
+	GPU    string `json:"gpu"`
+	CPU    string `json:"cpu"`
 
-	// Apps the bundled Sunshine offers besides the desktop, e.g.
-	// {"name": "Dota 2", "cmd": "C:\\path\\to\\dota2.exe"}. Read on first run only;
-	// later edits go through Sunshine's apps.json in the fogplay cache folder.
-	Apps []agent.App `json:"apps"`
+	// Apps offered besides the desktop, e.g.
+	// {"name": "Dota 2", "cmd": "C:\\path\\to\\dota2.exe"}.
+	Apps []agent.App `json:"apps,omitempty"`
 
-	// Set these only to use a Sunshine you installed yourself instead of the
-	// one fogplay downloads and runs.
-	SunshineURL      string   `json:"sunshine_url,omitempty"`
-	SunshineUser     string   `json:"sunshine_user,omitempty"`
-	SunshinePassword string   `json:"sunshine_password,omitempty"`
-	Games            []string `json:"games,omitempty"`
+	// Stream settings; zero values use the defaults.
+	BitrateMbps int    `json:"bitrate_mbps,omitempty"`
+	FPS         int    `json:"fps,omitempty"`
+	Encoder     string `json:"encoder,omitempty"` // e.g. h264_nvenc; default: the first that works
+	FFmpeg      string `json:"ffmpeg,omitempty"`  // path; default: on PATH, else downloaded
+	TestPattern bool   `json:"test_pattern,omitempty"`
 
 	HostID string `json:"host_id"`
 }
@@ -53,7 +52,7 @@ const hostExample = `{
 }`
 
 // host registers this PC with the server, keeps it online, and lets players
-// stream from it with Moonlight until interrupted.
+// stream from it until interrupted.
 func host(ctx context.Context, args []string) {
 	defDir, _ := cli.ConfigDir()
 	fs := flag.NewFlagSet("host", flag.ExitOnError)
@@ -84,49 +83,23 @@ func host(ctx context.Context, args []string) {
 	if cfg.Region == "" {
 		cfg.Region = "home"
 	}
-	if cfg.Address == "" {
-		cfg.Address = cli.LocalIP()
-	}
 
 	api := client.New(cfg.Server, "")
 	if err := hostSignIn(ctx, api, cfg, log); err != nil {
 		fatal(err)
 	}
 
-	var sun agent.Sunshine
-	var managed *agent.ManagedSunshine
-	// fatal exits without running defers; stop our Sunshine first.
-	die := func(err error) {
-		if managed != nil {
-			managed.Stop()
-		}
+	st, err := streamer(ctx, cfg, log)
+	if err != nil {
 		fatal(err)
 	}
-	if cfg.SunshineUser != "" {
-		if cfg.SunshineURL == "" {
-			cfg.SunshineURL = "https://localhost:47990"
-		}
-		sun = agent.NewSunshineHTTP(cfg.SunshineURL, cfg.SunshineUser, cfg.SunshinePassword)
-	} else {
-		dir, err := fetch.CacheDir("sunshine")
-		if err != nil {
-			fatal(err)
-		}
-		managed = &agent.ManagedSunshine{Dir: dir, Name: cfg.Name, Apps: cfg.Apps, Log: log}
-		defer managed.Stop()
-		if sun, err = managed.Start(ctx); err != nil {
-			die(err)
-		}
-	}
-
 	a := agent.New(agent.Config{
-		HostID: cfg.HostID, Name: cfg.Name, Region: cfg.Region, GPU: cfg.GPU, CPU: cfg.CPU,
-		Address: cfg.Address, FallbackGames: cfg.Games,
-	}, api, sun, log)
+		HostID: cfg.HostID, Name: cfg.Name, Region: cfg.Region, GPU: cfg.GPU, CPU: cfg.CPU, Apps: cfg.Apps,
+	}, api, st, log)
 
 	id, err := a.Setup(ctx)
 	if err != nil {
-		die(err)
+		fatal(err)
 	}
 	if id != cfg.HostID {
 		cfg.HostID = id
@@ -135,7 +108,7 @@ func host(ctx context.Context, args []string) {
 		}
 	}
 	if err := a.Run(ctx); err != nil {
-		die(err)
+		fatal(err)
 	}
 }
 
@@ -153,4 +126,51 @@ func hostSignIn(ctx context.Context, api *client.Client, cfg hostConfig, log *sl
 	}
 	log.Info("created host account", "email", cfg.Email)
 	return nil
+}
+
+// streamer finds FFmpeg and a working encoder and sets up screen capture.
+func streamer(ctx context.Context, cfg hostConfig, log *slog.Logger) (*stream.Host, error) {
+	ffmpeg := cfg.FFmpeg
+	if ffmpeg == "" {
+		dir, err := fetch.CacheDir("ffmpeg")
+		if err != nil {
+			return nil, err
+		}
+		if ffmpeg, err = stream.EnsureFFmpeg(ctx, dir, log); err != nil {
+			return nil, err
+		}
+	}
+	var enc stream.Encoder
+	if cfg.Encoder != "" {
+		for _, e := range stream.Encoders {
+			if e.Name == cfg.Encoder {
+				enc = e
+			}
+		}
+		if enc.Name == "" {
+			return nil, fmt.Errorf("unknown encoder %q", cfg.Encoder)
+		}
+	} else {
+		var err error
+		if enc, err = stream.PickEncoder(ctx, ffmpeg); err != nil {
+			return nil, err
+		}
+	}
+	fps := cfg.FPS
+	if fps == 0 {
+		fps = 60
+	}
+	capture := stream.TestCapture(1280, 720, fps)
+	if !cfg.TestPattern {
+		var err error
+		if capture, err = stream.ScreenCapture(fps); err != nil {
+			return nil, err
+		}
+	}
+	log.Info("stream ready", "ffmpeg", ffmpeg, "encoder", enc.Name, "fps", fps)
+	return &stream.Host{
+		FFmpeg: ffmpeg, Encoder: enc, Capture: capture,
+		Bitrate: cfg.BitrateMbps * 1_000_000, GOP: fps,
+		Input: stream.NewInjector(log), Log: log,
+	}, nil
 }
