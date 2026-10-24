@@ -3,9 +3,9 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/fogplay ./cmd/fogplay
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/fogplay-server ./cmd/fogplay-server
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/fogplay /fogplay
+COPY --from=build /out/fogplay-server /fogplay-server
 EXPOSE 8080
-ENTRYPOINT ["/fogplay"]
+ENTRYPOINT ["/fogplay-server"]

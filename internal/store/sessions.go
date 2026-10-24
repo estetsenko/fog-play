@@ -160,24 +160,29 @@ func (s *Store) TransitionSession(ctx context.Context, id string, from []string,
 	return x, nil
 }
 
-// ExpireStaleSessions fails sessions that never became active within maxAge
-// and returns the hosts they had booked.
-func (s *Store) ExpireStaleSessions(ctx context.Context, maxAge time.Duration) ([]string, error) {
+// ExpiredSession identifies a session the reaper failed.
+type ExpiredSession struct {
+	ID     string
+	HostID string
+}
+
+// ExpireStaleSessions fails sessions that never became active within maxAge.
+func (s *Store) ExpireStaleSessions(ctx context.Context, maxAge time.Duration) ([]ExpiredSession, error) {
 	rows, err := s.pool.Query(ctx, `
 		UPDATE sessions SET state = 'failed', failure_reason = 'timed out before streaming started', ended_at = now()
 		WHERE state IN ('matched', 'connecting') AND created_at < now() - make_interval(secs => $1)
-		RETURNING host_id`, maxAge.Seconds())
+		RETURNING id, host_id`, maxAge.Seconds())
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var hosts []string
+	var out []ExpiredSession
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var x ExpiredSession
+		if err := rows.Scan(&x.ID, &x.HostID); err != nil {
 			return nil, err
 		}
-		hosts = append(hosts, id)
+		out = append(out, x)
 	}
-	return hosts, rows.Err()
+	return out, rows.Err()
 }

@@ -15,6 +15,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/estetsenko/fog-play/internal/auth"
+	"github.com/estetsenko/fog-play/internal/signal"
 	"github.com/estetsenko/fog-play/internal/store"
 )
 
@@ -30,43 +31,50 @@ type Server struct {
 	store    *store.Store
 	presence Presence
 	tokens   *auth.Issuer
+	hub      *signal.Hub
 	log      *slog.Logger
 }
 
 func New(st *store.Store, p Presence, tokens *auth.Issuer, log *slog.Logger) *Server {
-	return &Server{store: st, presence: p, tokens: tokens, log: log}
+	return &Server{store: st, presence: p, tokens: tokens, hub: signal.NewHub(), log: log}
 }
 
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer, middleware.Timeout(15*time.Second))
+	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
 
-	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	r.Get("/readyz", s.ready)
+	// Long-lived WebSocket; must not get the request timeout below.
+	r.With(s.authenticate).Get("/v1/sessions/{id}/signal", s.signal)
 
-	r.Route("/v1", func(r chi.Router) {
-		r.Post("/auth/register", s.register)
-		r.Post("/auth/login", s.login)
+	r.Group(func(r chi.Router) {
+		r.Use(middleware.Timeout(15 * time.Second))
+		r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+		r.Get("/readyz", s.ready)
 
-		r.Group(func(r chi.Router) {
-			r.Use(s.authenticate)
-			r.Get("/me", s.me)
-			r.Get("/games", s.listGames)
-
-			r.Post("/sessions", s.createSession)
-			r.Get("/sessions", s.listSessions)
-			r.Get("/sessions/{id}", s.getSession)
-			r.Put("/sessions/{id}/state", s.updateSessionState)
-			r.Delete("/sessions/{id}", s.endSession)
+		r.Route("/v1", func(r chi.Router) {
+			r.Post("/auth/register", s.register)
+			r.Post("/auth/login", s.login)
 
 			r.Group(func(r chi.Router) {
-				r.Use(requireRole("host", "both"))
-				r.Post("/hosts", s.createHost)
-				r.Get("/hosts", s.listHosts)
-				r.Get("/hosts/{id}", s.getHost)
-				r.Put("/hosts/{id}/games", s.replaceHostGames)
-				r.Put("/hosts/{id}/status", s.heartbeat)
-				r.Get("/hosts/{id}/session", s.hostSession)
+				r.Use(s.authenticate)
+				r.Get("/me", s.me)
+				r.Get("/games", s.listGames)
+
+				r.Post("/sessions", s.createSession)
+				r.Get("/sessions", s.listSessions)
+				r.Get("/sessions/{id}", s.getSession)
+				r.Put("/sessions/{id}/state", s.updateSessionState)
+				r.Delete("/sessions/{id}", s.endSession)
+
+				r.Group(func(r chi.Router) {
+					r.Use(requireRole("host", "both"))
+					r.Post("/hosts", s.createHost)
+					r.Get("/hosts", s.listHosts)
+					r.Get("/hosts/{id}", s.getHost)
+					r.Put("/hosts/{id}/games", s.replaceHostGames)
+					r.Put("/hosts/{id}/status", s.heartbeat)
+					r.Get("/hosts/{id}/session", s.hostSession)
+				})
 			})
 		})
 	})

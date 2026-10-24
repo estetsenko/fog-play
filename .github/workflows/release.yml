@@ -1,0 +1,31 @@
+name: release
+
+# Builds the player CLI, host agent and server for each OS on every push to
+# main (downloadable from the run's artifacts) and publishes a GitHub release
+# for v* tags.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make dist VERSION=${GITHUB_REF_NAME}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fogplay-binaries
+          path: dist/*
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
