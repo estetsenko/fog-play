@@ -50,9 +50,12 @@ func run(log *slog.Logger) error {
 	}
 	defer pres.Close()
 
+	apiSrv := api.New(store.New(pool), pres, auth.NewIssuer(cfg.JWTSecret, cfg.TokenTTL), log)
+	go reapStaleSessions(ctx, apiSrv, cfg.SessionStartTimeout, log)
+
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.New(store.New(pool), pres, auth.NewIssuer(cfg.JWTSecret, cfg.TokenTTL), log).Handler(),
+		Handler:           apiSrv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errc := make(chan error, 1)
@@ -71,4 +74,22 @@ func run(log *slog.Logger) error {
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return srv.Shutdown(shutdownCtx)
+}
+
+func reapStaleSessions(ctx context.Context, srv *api.Server, maxAge time.Duration, log *slog.Logger) {
+	t := time.NewTicker(maxAge / 4)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := srv.ReapStaleSessions(ctx, maxAge)
+			if err != nil {
+				log.Error("reap stale sessions", "err", err)
+			} else if n > 0 {
+				log.Info("reaped stale sessions", "count", n)
+			}
+		}
+	}
 }

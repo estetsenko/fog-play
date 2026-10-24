@@ -137,6 +137,17 @@ func (s *Server) heartbeat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "status must be idle, busy, or offline")
 		return
 	}
+	// An agent that reports idle while a session is booked on it has not
+	// picked the session up yet; keep it out of matching.
+	if req.Status == "idle" {
+		_, err := s.store.LiveHostSession(r.Context(), h.ID)
+		if err == nil {
+			req.Status = "busy"
+		} else if !isNotFound(err) {
+			s.internal(w, r, err)
+			return
+		}
+	}
 	if err := s.presence.Set(r.Context(), h.ID, req.Status); err != nil {
 		s.internal(w, r, err)
 		return

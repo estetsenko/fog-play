@@ -32,6 +32,16 @@ func (r *Redis) Set(ctx context.Context, hostID, status string) error {
 	return r.rdb.Set(ctx, key(hostID), status, r.ttl).Err()
 }
 
+// Update changes the status of a host that is online, keeping its heartbeat
+// expiry. It does nothing for an offline host, so it never brings one back.
+func (r *Redis) Update(ctx context.Context, hostID, status string) error {
+	err := r.rdb.SetArgs(ctx, key(hostID), status, redis.SetArgs{Mode: "XX", KeepTTL: true}).Err()
+	if err == redis.Nil {
+		return nil
+	}
+	return err
+}
+
 // Statuses returns the live status of each host; hosts with no heartbeat are "offline".
 func (r *Redis) Statuses(ctx context.Context, hostIDs []string) (map[string]string, error) {
 	out := make(map[string]string, len(hostIDs))

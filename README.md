@@ -29,6 +29,7 @@ go run ./cmd/fogplay
 | `REDIS_URL` | `redis://localhost:6379/0` | Host presence |
 | `FOGPLAY_ADDR` | `:8080` | Listen address |
 | `HEARTBEAT_TTL` | `30s` | A host counts as offline this long after its last heartbeat |
+| `SESSION_START_TIMEOUT` | `60s` | A matched session that has not gone active by then fails and frees its host |
 
 ## Test
 
@@ -53,6 +54,26 @@ All endpoints except register and login take `Authorization: Bearer <token>`.
 | GET | `/v1/hosts/{id}` | host | One of your PCs |
 | PUT | `/v1/hosts/{id}/games` | host | Replace installed games |
 | PUT | `/v1/hosts/{id}/status` | host agent | Heartbeat: `{status: idle \| busy \| offline}` |
+| GET | `/v1/hosts/{id}/session` | host agent | The live session booked on this PC, or 204 |
+| POST | `/v1/sessions` | any user | `{game, latency_ms: {region: ms}}`; books the best idle host |
+| GET | `/v1/sessions` | any user | Your last 50 sessions as a player |
+| GET | `/v1/sessions/{id}` | player, host owner | One session |
+| PUT | `/v1/sessions/{id}/state` | player, host owner | `{state, reason}`: `connecting`, `active`, `ended`, `failed` |
+| DELETE | `/v1/sessions/{id}` | player, host owner | End the session |
+
+### Sessions
+
+```
+matched ──▶ connecting ──▶ active ──▶ ended
+   └────────────┴─────────────┴─────▶ failed / ended
+```
+
+Matching picks, among idle hosts that have the game and are not yours, the
+one in the region with the lowest `latency_ms` the client reported, then the
+most recent heartbeat. Postgres partial unique indexes guarantee a host and a
+player each have at most one live session, so concurrent requests can't
+double-book a PC; the loser moves on to the next candidate. Ending an active
+session records billable `minutes`, rounded up.
 
 ```sh
 TOKEN=$(curl -s localhost:8080/v1/auth/register -d '{"email":"me@example.com","password":"password1","role":"both"}' | jq -r .token)
@@ -70,13 +91,14 @@ internal/api       HTTP handlers and auth middleware
 internal/auth      password hashing, JWT
 internal/store     Postgres queries
 internal/presence  Redis heartbeats with TTL
+internal/match     host ranking
 internal/db        pool and embedded SQL migrations
 ```
 
 ## Roadmap
 
-1. ~~Skeleton~~ and ~~accounts, hosts, heartbeats, catalog~~ (this PR)
-2. Sessions and matching: session API, state machine, latency-based host pick
+1. ~~Skeleton~~ and ~~accounts, hosts, heartbeats, catalog~~
+2. ~~Sessions and matching: session API, state machine, latency-based host pick~~
 3. Signaling: WebSocket relay for SDP and ICE, coturn
 4. Host agent: Go daemon that wraps Sunshine
 5. Metering, then payments and host payouts
