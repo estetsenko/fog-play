@@ -13,6 +13,7 @@ import (
 	"github.com/estetsenko/fog-play/internal/agent"
 	"github.com/estetsenko/fog-play/internal/cli"
 	"github.com/estetsenko/fog-play/internal/client"
+	"github.com/estetsenko/fog-play/internal/fetch"
 )
 
 // hostConfig is the config for "fogplay host", which shares this PC's games
@@ -28,10 +29,17 @@ type hostConfig struct {
 	CPU     string `json:"cpu"`
 	Address string `json:"address"`
 
-	SunshineURL      string   `json:"sunshine_url"`
-	SunshineUser     string   `json:"sunshine_user"`
-	SunshinePassword string   `json:"sunshine_password"`
-	Games            []string `json:"games"`
+	// Apps the bundled Sunshine offers besides the desktop, e.g.
+	// {"name": "Dota 2", "cmd": "C:\\path\\to\\dota2.exe"}. Read on first run only;
+	// later edits go through Sunshine's apps.json in the fogplay cache folder.
+	Apps []agent.App `json:"apps"`
+
+	// Set these only to use a Sunshine you installed yourself instead of the
+	// one fogplay downloads and runs.
+	SunshineURL      string   `json:"sunshine_url,omitempty"`
+	SunshineUser     string   `json:"sunshine_user,omitempty"`
+	SunshinePassword string   `json:"sunshine_password,omitempty"`
+	Games            []string `json:"games,omitempty"`
 
 	HostID string `json:"host_id"`
 }
@@ -41,13 +49,7 @@ const hostExample = `{
   "email": "host@example.com",
   "password": "change-me-please",
   "name": "Living room PC",
-  "region": "home",
-  "gpu": "RTX 4070",
-  "cpu": "Ryzen 7 7700",
-  "address": "",
-  "sunshine_url": "https://localhost:47990",
-  "sunshine_user": "sunshine",
-  "sunshine_password": "your-sunshine-web-ui-password"
+  "gpu": "RTX 4070"
 }`
 
 // host registers this PC with the server, keeps it online, and lets players
@@ -85,23 +87,46 @@ func host(ctx context.Context, args []string) {
 	if cfg.Address == "" {
 		cfg.Address = cli.LocalIP()
 	}
-	if cfg.SunshineURL == "" {
-		cfg.SunshineURL = "https://localhost:47990"
-	}
 
 	api := client.New(cfg.Server, "")
 	if err := hostSignIn(ctx, api, cfg, log); err != nil {
 		fatal(err)
 	}
 
+	var sun agent.Sunshine
+	var managed *agent.ManagedSunshine
+	// fatal exits without running defers; stop our Sunshine first.
+	die := func(err error) {
+		if managed != nil {
+			managed.Stop()
+		}
+		fatal(err)
+	}
+	if cfg.SunshineUser != "" {
+		if cfg.SunshineURL == "" {
+			cfg.SunshineURL = "https://localhost:47990"
+		}
+		sun = agent.NewSunshineHTTP(cfg.SunshineURL, cfg.SunshineUser, cfg.SunshinePassword)
+	} else {
+		dir, err := fetch.CacheDir("sunshine")
+		if err != nil {
+			fatal(err)
+		}
+		managed = &agent.ManagedSunshine{Dir: dir, Name: cfg.Name, Apps: cfg.Apps, Log: log}
+		defer managed.Stop()
+		if sun, err = managed.Start(ctx); err != nil {
+			die(err)
+		}
+	}
+
 	a := agent.New(agent.Config{
 		HostID: cfg.HostID, Name: cfg.Name, Region: cfg.Region, GPU: cfg.GPU, CPU: cfg.CPU,
 		Address: cfg.Address, FallbackGames: cfg.Games,
-	}, api, agent.NewSunshineHTTP(cfg.SunshineURL, cfg.SunshineUser, cfg.SunshinePassword), log)
+	}, api, sun, log)
 
 	id, err := a.Setup(ctx)
 	if err != nil {
-		fatal(err)
+		die(err)
 	}
 	if id != cfg.HostID {
 		cfg.HostID = id
@@ -110,7 +135,7 @@ func host(ctx context.Context, args []string) {
 		}
 	}
 	if err := a.Run(ctx); err != nil {
-		fatal(err)
+		die(err)
 	}
 }
 

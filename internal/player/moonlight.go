@@ -38,6 +38,8 @@ func FindMoonlight() string {
 func (m MoonlightCLI) run(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, m.Path, args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	// A downloaded AppImage normally needs FUSE; this runs it without.
+	cmd.Env = append(os.Environ(), "APPIMAGE_EXTRACT_AND_RUN=1")
 	return cmd.Run()
 }
 
