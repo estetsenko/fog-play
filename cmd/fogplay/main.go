@@ -1,5 +1,5 @@
-// Command fogplay is the player CLI: sign in, list games, and play one by
-// streaming it with Moonlight from a host PC.
+// Command fogplay is the Fog Play client. The same binary plays games from
+// other PCs (with Moonlight) and shares this PC's games (with Sunshine).
 package main
 
 import (
@@ -21,10 +21,14 @@ import (
 )
 
 const usage = `usage:
-  fogplay register --server URL --email EMAIL   create a player account and sign in
-  fogplay login    --server URL --email EMAIL   sign in
-  fogplay games                                 list games and how many hosts are free
-  fogplay play GAME [--moonlight PATH]          stream GAME (a slug from "fogplay games")
+  play from another PC (needs Moonlight):
+    fogplay register --server URL --email EMAIL   create a player account and sign in
+    fogplay login    --server URL --email EMAIL   sign in
+    fogplay games                                 list games and how many hosts are free
+    fogplay play GAME [--moonlight PATH]          stream GAME (a slug from "fogplay games")
+
+  share this PC's games (needs Sunshine):
+    fogplay host [--config PATH] [--debug]        go online and serve players until Ctrl+C
 `
 
 type config struct {
@@ -56,6 +60,8 @@ func main() {
 		games(ctx)
 	case "play":
 		play(ctx, args)
+	case "host":
+		host(ctx, args)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(2)

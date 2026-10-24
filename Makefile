@@ -9,15 +9,13 @@ build:
 VERSION ?= dev
 PLATFORMS := windows/amd64 darwin/arm64 darwin/amd64 linux/amd64
 
-# Zips of the player CLI and host agent per platform, plus the server for Linux.
+# The fogplay client zipped per platform, plus the server for Linux.
 dist:
 	rm -rf dist && mkdir -p dist
 	@for p in $(PLATFORMS); do \
 		os=$${p%/*}; arch=$${p#*/}; ext=; [ $$os = windows ] && ext=.exe; \
 		out=dist/fogplay-$(VERSION)-$$os-$$arch; mkdir -p $$out; \
-		for c in fogplay fogplay-agent; do \
-			CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="-s -w" -o $$out/$$c$$ext ./cmd/$$c || exit 1; \
-		done; \
+		CGO_ENABLED=0 GOOS=$$os GOARCH=$$arch go build -trimpath -ldflags="-s -w" -o $$out/fogplay$$ext ./cmd/fogplay || exit 1; \
 		(cd dist && zip -qr fogplay-$(VERSION)-$$os-$$arch.zip fogplay-$(VERSION)-$$os-$$arch) && rm -rf $$out; \
 	done
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/fogplay-server-$(VERSION)-linux-amd64 ./cmd/fogplay-server

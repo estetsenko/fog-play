@@ -11,11 +11,12 @@ Design doc: https://claude.ai/artifact/WL4ZkM1vrRcZcwPz1M3Zct
 Streaming uses [Sunshine](https://github.com/LizardByte/Sunshine) on the host
 and [Moonlight](https://moonlight-stream.org) on the player for now.
 
+There are two binaries, both command-line only:
+
 | Binary | Runs on | Does |
 | --- | --- | --- |
 | `fogplay-server` | a server | The control plane API |
-| `fogplay-agent` | host PC, next to Sunshine | Registers the PC, sends heartbeats, accepts bookings, pairs Moonlight, unpairs it after the session |
-| `fogplay` | player PC, next to Moonlight | `register`, `login`, `games`, `play GAME` |
+| `fogplay` | any PC | `fogplay play GAME` streams a game from another PC with Moonlight (`register`, `login`, `games` too). `fogplay host` shares this PC through Sunshine: registers it, sends heartbeats, accepts bookings, pairs the player's Moonlight, and unpairs it after the session. |
 
 ## Run it
 
@@ -63,8 +64,8 @@ All endpoints except register and login take `Authorization: Bearer <token>`.
 | GET | `/v1/hosts` | host | Your PCs |
 | GET | `/v1/hosts/{id}` | host | One of your PCs |
 | PUT | `/v1/hosts/{id}/games` | host | Replace installed games |
-| PUT | `/v1/hosts/{id}/status` | host agent | Heartbeat: `{status: idle \| busy \| offline}` |
-| GET | `/v1/hosts/{id}/session` | host agent | The live session booked on this PC, or 204 |
+| PUT | `/v1/hosts/{id}/status` | `fogplay host` | Heartbeat: `{status: idle \| busy \| offline}` |
+| GET | `/v1/hosts/{id}/session` | `fogplay host` | The live session booked on this PC, or 204 |
 | POST | `/v1/sessions` | any user | `{game, latency_ms: {region: ms}}`; books the best idle host |
 | GET | `/v1/sessions` | any user | Your last 50 sessions as a player |
 | GET | `/v1/sessions/{id}` | player, host owner | One session |
@@ -109,12 +110,11 @@ host answers `pair-result` once Sunshine has accepted it.
 
 ```
 cmd/fogplay-server server entrypoint
-cmd/fogplay-agent  host agent
-cmd/fogplay        player CLI
+cmd/fogplay        client: play and host subcommands
 internal/api       HTTP handlers and auth middleware
 internal/signal    WebSocket relay hub
 internal/client    Go API client
-internal/agent     host agent logic and Sunshine API client
+internal/agent     host logic ("fogplay host") and Sunshine API client
 internal/player    player session flow and Moonlight runner
 internal/e2e       full-flow tests with fake Sunshine and Moonlight
 internal/auth      password hashing, JWT
@@ -128,6 +128,6 @@ internal/db        pool and embedded SQL migrations
 
 1. ~~Skeleton~~ and ~~accounts, hosts, heartbeats, catalog~~
 2. ~~Sessions and matching: session API, state machine, latency-based host pick~~
-3. ~~Signaling relay, host agent, player CLI with Sunshine + Moonlight~~
+3. ~~Signaling relay, host and player client with Sunshine + Moonlight~~
 4. Own WebRTC streaming in the client, coturn for NAT traversal
 5. Metering, then payments and host payouts
