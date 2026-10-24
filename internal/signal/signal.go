@@ -32,31 +32,20 @@ type Message struct {
 	Data json.RawMessage `json:"data,omitempty"`
 }
 
-// Message types used by the Moonlight flow.
+// Message types of the WebRTC handshake. Offers come from the host, so a
+// player that reloads its page just says hello again and gets a fresh one.
 const (
-	// TypeHostInfo goes host -> player: where to connect and which app to start.
-	TypeHostInfo = "host-info"
-	// TypePairPIN goes player -> host: the PIN Moonlight is pairing with.
-	TypePairPIN = "pair-pin"
-	// TypePairResult goes host -> player: whether Sunshine accepted the PIN.
-	TypePairResult = "pair-result"
+	// TypeHello goes player -> host: the player is ready for an offer.
+	TypeHello = "hello"
+	// TypeOffer goes host -> player: an SDP offer with all ICE candidates.
+	TypeOffer = "offer"
+	// TypeAnswer goes player -> host: the SDP answer.
+	TypeAnswer = "answer"
 )
 
-type HostInfo struct {
-	Address string `json:"address"`
-	App     string `json:"app"`
-}
-
-type PairPIN struct {
-	PIN string `json:"pin"`
-	// ClientName is the name Moonlight pairs under, used to pick the right
-	// pending request when Sunshine has several.
-	ClientName string `json:"client_name"`
-}
-
-type PairResult struct {
-	OK    bool   `json:"ok"`
-	Error string `json:"error,omitempty"`
+// SDP is the data of an offer or answer.
+type SDP struct {
+	SDP string `json:"sdp"`
 }
 
 type peer struct {

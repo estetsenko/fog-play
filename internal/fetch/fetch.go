@@ -1,6 +1,6 @@
 // Package fetch downloads release builds of the third-party programs fogplay
-// runs (Sunshine on hosts, Moonlight on players) from their GitHub releases,
-// so users don't install them by hand.
+// runs (FFmpeg on Windows hosts) from their GitHub releases, so users don't
+// install them by hand.
 package fetch
 
 import (

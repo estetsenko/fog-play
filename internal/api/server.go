@@ -43,13 +43,16 @@ func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
 
-	// Long-lived WebSocket; must not get the request timeout below.
-	r.With(s.authenticate).Get("/v1/sessions/{id}/signal", s.signal)
+	// Long-lived WebSocket; must not get the request timeout below. Browsers
+	// can't set headers on a WebSocket, so the token may come in the query.
+	r.With(tokenFromQuery, s.authenticate).Get("/v1/sessions/{id}/signal", s.signal)
 
 	r.Group(func(r chi.Router) {
 		r.Use(middleware.Timeout(15 * time.Second))
 		r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 		r.Get("/readyz", s.ready)
+		r.Get("/play", page("play.html", "text/html; charset=utf-8"))
+		r.Get("/play.js", page("play.js", "text/javascript; charset=utf-8"))
 
 		r.Route("/v1", func(r chi.Router) {
 			r.Post("/auth/register", s.register)
@@ -108,6 +111,17 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), ctxKey{}, c)))
+	})
+}
+
+// tokenFromQuery moves an access_token query parameter into the
+// Authorization header when there is none.
+func tokenFromQuery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if t := r.URL.Query().Get("access_token"); t != "" && r.Header.Get("Authorization") == "" {
+			r.Header.Set("Authorization", "Bearer "+t)
+		}
+		next.ServeHTTP(w, r)
 	})
 }
 

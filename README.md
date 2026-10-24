@@ -8,17 +8,17 @@ it; it flows peer to peer between player and host.
 Design doc: https://claude.ai/artifact/WL4ZkM1vrRcZcwPz1M3Zct
 
 **Try it on real PCs:** [docs/real-pc-test.md](docs/real-pc-test.md).
-Streaming uses [Sunshine](https://github.com/LizardByte/Sunshine) on the host
-and [Moonlight](https://moonlight-stream.org) on the player for now. fogplay
-downloads and runs both itself, so there's nothing else to install
-([third-party notes](docs/third-party.md)).
+Streaming is our own engine: the host captures and encodes its screen with
+FFmpeg (downloaded on first use on Windows) and sends it over WebRTC; the player
+watches in a browser and its mouse and keyboard go back over a data channel.
+Nothing else to install ([third-party notes](docs/third-party.md)).
 
 There are two binaries, both command-line only:
 
 | Binary | Runs on | Does |
 | --- | --- | --- |
-| `fogplay-server` | a server | The control plane API |
-| `fogplay` | any PC | `fogplay play GAME` streams a game from another PC with Moonlight (`register`, `login`, `games` too). `fogplay host` shares this PC through a Sunshine it downloads and runs itself: registers it, sends heartbeats, accepts bookings, pairs the player's Moonlight, and unpairs it after the session. |
+| `fogplay-server` | a server | The control plane API and the browser play page (`/play`) |
+| `fogplay` | any PC | `fogplay play GAME` books a host and opens the stream in the browser (`register`, `login`, `games` too). `fogplay host` shares this PC: registers it, sends heartbeats, accepts bookings, starts the game, streams the screen, and replays the player's input. |
 
 ## Run it
 
@@ -104,9 +104,11 @@ session's player and host; the server adds `from`. Messages sent before the
 other side connects are queued. The relay closes when the session ends. The
 hub is in memory, so run a single server instance for now.
 
-The Moonlight flow uses three messages: the host sends `host-info` (address,
-app), the player sends `pair-pin` (a random PIN Moonlight pairs with), and the
-host answers `pair-result` once Sunshine has accepted it.
+The WebRTC handshake uses three messages: the player's page sends `hello`, the
+host answers with an `offer` (SDP with all ICE candidates), and the page replies
+with an `answer`. A reloaded page says hello again and gets a fresh offer.
+Browsers can't set headers on a WebSocket, so this route also takes the token
+as `?access_token=`.
 
 ## Layout
 
@@ -116,10 +118,12 @@ cmd/fogplay        client: play and host subcommands
 internal/api       HTTP handlers and auth middleware
 internal/signal    WebSocket relay hub
 internal/client    Go API client
-internal/agent     host logic ("fogplay host"), Sunshine API client, managed Sunshine
-internal/fetch     downloads Sunshine/Moonlight release builds
-internal/player    player session flow and Moonlight runner
-internal/e2e       full-flow tests with fake Sunshine and Moonlight
+internal/api/web   browser play page (embedded)
+internal/agent     host logic ("fogplay host"): bookings, games, session lifecycle
+internal/stream    streaming engine: FFmpeg capture/encode, Pion WebRTC, input
+internal/fetch     downloads FFmpeg release builds
+internal/player    player session flow (book, open browser, wait)
+internal/e2e       full-flow tests, including FFmpeg to a Go WebRTC peer
 internal/auth      password hashing, JWT
 internal/store     Postgres queries
 internal/presence  Redis heartbeats with TTL
@@ -133,5 +137,7 @@ internal/db        pool and embedded SQL migrations
 2. ~~Sessions and matching: session API, state machine, latency-based host pick~~
 3. ~~Signaling relay, host and player client with Sunshine + Moonlight~~
 4. ~~fogplay downloads and runs Sunshine and Moonlight itself~~
-5. Own WebRTC streaming engine in the client (replaces Sunshine and Moonlight), coturn for NAT traversal
+5. Own streaming engine ([plan](https://claude.ai/artifact/9YAVXhfR5UFrqscCoS7GRQ)):
+   ~~phase 1, video and mouse/keyboard in the browser on LAN~~; phase 2 audio,
+   gamepad, game-only sessions; phase 3 coturn for play across NAT; phase 4 quality
 6. Metering, then payments and host payouts

@@ -1,5 +1,5 @@
 // Command fogplay is the Fog Play client. The same binary plays games from
-// other PCs (with Moonlight) and shares this PC's games (with Sunshine).
+// other PCs in the browser and streams this PC's games to other players.
 package main
 
 import (
@@ -17,7 +17,6 @@ import (
 
 	"github.com/estetsenko/fog-play/internal/cli"
 	"github.com/estetsenko/fog-play/internal/client"
-	"github.com/estetsenko/fog-play/internal/fetch"
 	"github.com/estetsenko/fog-play/internal/player"
 )
 
@@ -26,12 +25,12 @@ const usage = `usage:
     fogplay register --server URL --email EMAIL   create a player account and sign in
     fogplay login    --server URL --email EMAIL   sign in
     fogplay games                                 list games and how many hosts are free
-    fogplay play GAME [--moonlight PATH]          stream GAME (a slug from "fogplay games")
-                                                  Moonlight is downloaded on first use
+    fogplay play GAME [--no-browser]              stream GAME (a slug from "fogplay games")
+                                                  in your browser
 
   share this PC's games:
     fogplay host [--config PATH] [--debug]        go online and serve players until Ctrl+C
-                                                  Sunshine is downloaded and run on first use
+                                                  FFmpeg is downloaded on first use (Windows)
 `
 
 type config struct {
@@ -127,8 +126,7 @@ func games(ctx context.Context) {
 
 func play(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("play", flag.ExitOnError)
-	moonlight := fs.String("moonlight", "", "path to the Moonlight executable (default: an installed Moonlight, else a downloaded portable copy)")
-	name := fs.String("name", "", "name this PC pairs under in Sunshine (defaults to the hostname)")
+	noBrowser := fs.Bool("no-browser", false, "print the play page link instead of opening the browser")
 	if len(args) == 0 {
 		fatal(errors.New("usage: fogplay play GAME"))
 	}
@@ -136,25 +134,19 @@ func play(ctx context.Context, args []string) {
 	fs.Parse(args[1:])
 
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if *moonlight == "" {
-		dir, err := fetch.CacheDir("moonlight")
-		if err != nil {
-			fatal(err)
-		}
-		if *moonlight, err = player.EnsureMoonlight(ctx, dir, log); err != nil {
-			fatal(fmt.Errorf("get Moonlight: %w (or install it and pass --moonlight)", err))
-		}
-	}
-	if *name == "" {
-		*name, _ = os.Hostname()
-	}
-	err := player.Play(ctx, apiClient(), player.MoonlightCLI{Path: *moonlight}, player.Options{
-		Game:       game,
-		ClientName: *name,
-		Started: func(address, app string) {
-			fmt.Printf("Streaming %s from %s. Close Moonlight or press Ctrl+C to end.\n", app, address)
+	opt := player.Options{
+		Game: game,
+		Opened: func(url string) {
+			fmt.Println("Streaming in your browser. Close the tab's session with End, or press Ctrl+C here to end.")
 		},
-	}, log)
+	}
+	if *noBrowser {
+		opt.Open = func(url string) error {
+			fmt.Println("Open this page to play:\n" + url)
+			return nil
+		}
+	}
+	err := player.Play(ctx, apiClient(), opt, log)
 	if client.IsStatus(err, http.StatusServiceUnavailable) {
 		fatal(errors.New("no free host has this game right now"))
 	}
