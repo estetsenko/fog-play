@@ -17,18 +17,21 @@ import (
 
 	"github.com/estetsenko/fog-play/internal/cli"
 	"github.com/estetsenko/fog-play/internal/client"
+	"github.com/estetsenko/fog-play/internal/fetch"
 	"github.com/estetsenko/fog-play/internal/player"
 )
 
 const usage = `usage:
-  play from another PC (needs Moonlight):
+  play from another PC:
     fogplay register --server URL --email EMAIL   create a player account and sign in
     fogplay login    --server URL --email EMAIL   sign in
     fogplay games                                 list games and how many hosts are free
     fogplay play GAME [--moonlight PATH]          stream GAME (a slug from "fogplay games")
+                                                  Moonlight is downloaded on first use
 
-  share this PC's games (needs Sunshine):
+  share this PC's games:
     fogplay host [--config PATH] [--debug]        go online and serve players until Ctrl+C
+                                                  Sunshine is downloaded and run on first use
 `
 
 type config struct {
@@ -124,7 +127,7 @@ func games(ctx context.Context) {
 
 func play(ctx context.Context, args []string) {
 	fs := flag.NewFlagSet("play", flag.ExitOnError)
-	moonlight := fs.String("moonlight", "", "path to the Moonlight executable (found automatically if empty)")
+	moonlight := fs.String("moonlight", "", "path to the Moonlight executable (default: an installed Moonlight, else a downloaded portable copy)")
 	name := fs.String("name", "", "name this PC pairs under in Sunshine (defaults to the hostname)")
 	if len(args) == 0 {
 		fatal(errors.New("usage: fogplay play GAME"))
@@ -132,16 +135,19 @@ func play(ctx context.Context, args []string) {
 	game := args[0]
 	fs.Parse(args[1:])
 
+	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if *moonlight == "" {
-		*moonlight = player.FindMoonlight()
-		if *moonlight == "" {
-			fatal(errors.New("Moonlight not found; install it from https://moonlight-stream.org or pass --moonlight"))
+		dir, err := fetch.CacheDir("moonlight")
+		if err != nil {
+			fatal(err)
+		}
+		if *moonlight, err = player.EnsureMoonlight(ctx, dir, log); err != nil {
+			fatal(fmt.Errorf("get Moonlight: %w (or install it and pass --moonlight)", err))
 		}
 	}
 	if *name == "" {
 		*name, _ = os.Hostname()
 	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	err := player.Play(ctx, apiClient(), player.MoonlightCLI{Path: *moonlight}, player.Options{
 		Game:       game,
 		ClientName: *name,

@@ -9,14 +9,16 @@ Design doc: https://claude.ai/artifact/WL4ZkM1vrRcZcwPz1M3Zct
 
 **Try it on real PCs:** [docs/real-pc-test.md](docs/real-pc-test.md).
 Streaming uses [Sunshine](https://github.com/LizardByte/Sunshine) on the host
-and [Moonlight](https://moonlight-stream.org) on the player for now.
+and [Moonlight](https://moonlight-stream.org) on the player for now. fogplay
+downloads and runs both itself, so there's nothing else to install
+([third-party notes](docs/third-party.md)).
 
 There are two binaries, both command-line only:
 
 | Binary | Runs on | Does |
 | --- | --- | --- |
 | `fogplay-server` | a server | The control plane API |
-| `fogplay` | any PC | `fogplay play GAME` streams a game from another PC with Moonlight (`register`, `login`, `games` too). `fogplay host` shares this PC through Sunshine: registers it, sends heartbeats, accepts bookings, pairs the player's Moonlight, and unpairs it after the session. |
+| `fogplay` | any PC | `fogplay play GAME` streams a game from another PC with Moonlight (`register`, `login`, `games` too). `fogplay host` shares this PC through a Sunshine it downloads and runs itself: registers it, sends heartbeats, accepts bookings, pairs the player's Moonlight, and unpairs it after the session. |
 
 ## Run it
 
@@ -114,7 +116,8 @@ cmd/fogplay        client: play and host subcommands
 internal/api       HTTP handlers and auth middleware
 internal/signal    WebSocket relay hub
 internal/client    Go API client
-internal/agent     host logic ("fogplay host") and Sunshine API client
+internal/agent     host logic ("fogplay host"), Sunshine API client, managed Sunshine
+internal/fetch     downloads Sunshine/Moonlight release builds
 internal/player    player session flow and Moonlight runner
 internal/e2e       full-flow tests with fake Sunshine and Moonlight
 internal/auth      password hashing, JWT
@@ -129,5 +132,6 @@ internal/db        pool and embedded SQL migrations
 1. ~~Skeleton~~ and ~~accounts, hosts, heartbeats, catalog~~
 2. ~~Sessions and matching: session API, state machine, latency-based host pick~~
 3. ~~Signaling relay, host and player client with Sunshine + Moonlight~~
-4. Own WebRTC streaming in the client, coturn for NAT traversal
-5. Metering, then payments and host payouts
+4. ~~fogplay downloads and runs Sunshine and Moonlight itself~~
+5. Own WebRTC streaming engine in the client (replaces Sunshine and Moonlight), coturn for NAT traversal
+6. Metering, then payments and host payouts
