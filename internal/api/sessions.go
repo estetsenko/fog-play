@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/estetsenko/fog-play/internal/match"
+	"github.com/estetsenko/fog-play/internal/signal"
 	"github.com/estetsenko/fog-play/internal/store"
 )
 
@@ -165,6 +167,7 @@ func (s *Server) transition(w http.ResponseWriter, r *http.Request, sess store.S
 		return
 	}
 	if to == "ended" || to == "failed" {
+		s.hub.Close(sess.ID)
 		if err := s.presence.Update(r.Context(), sess.HostID, "idle"); err != nil {
 			s.log.Warn("mark host idle", "host_id", sess.HostID, "err", err)
 		}
@@ -193,14 +196,37 @@ func (s *Server) hostSession(w http.ResponseWriter, r *http.Request) {
 // ReapStaleSessions fails sessions that did not start streaming within maxAge
 // and frees their hosts. It returns how many sessions it failed.
 func (s *Server) ReapStaleSessions(ctx context.Context, maxAge time.Duration) (int, error) {
-	hosts, err := s.store.ExpireStaleSessions(ctx, maxAge)
+	expired, err := s.store.ExpireStaleSessions(ctx, maxAge)
 	if err != nil {
 		return 0, err
 	}
-	for _, id := range hosts {
-		if err := s.presence.Update(ctx, id, "idle"); err != nil {
-			s.log.Warn("mark host idle", "host_id", id, "err", err)
+	for _, x := range expired {
+		s.hub.Close(x.ID)
+		if err := s.presence.Update(ctx, x.HostID, "idle"); err != nil {
+			s.log.Warn("mark host idle", "host_id", x.HostID, "err", err)
 		}
 	}
-	return len(hosts), nil
+	return len(expired), nil
+}
+
+// signal upgrades to a WebSocket that relays messages between the session's
+// player and host. Only live sessions accept connections.
+func (s *Server) signal(w http.ResponseWriter, r *http.Request) {
+	sess, ok := s.visibleSession(w, r)
+	if !ok {
+		return
+	}
+	if sess.State != "matched" && sess.State != "connecting" && sess.State != "active" {
+		writeError(w, http.StatusConflict, "session is "+sess.State)
+		return
+	}
+	role := signal.RolePlayer
+	if claims(r).UserID == sess.HostOwnerID {
+		role = signal.RoleHost
+	}
+	conn, err := websocket.Accept(w, r, nil)
+	if err != nil {
+		return // Accept has written the error response
+	}
+	s.hub.Serve(r.Context(), sess.ID, role, conn)
 }

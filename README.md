@@ -7,6 +7,16 @@ it; it flows peer to peer between player and host.
 
 Design doc: https://claude.ai/artifact/WL4ZkM1vrRcZcwPz1M3Zct
 
+**Try it on real PCs:** [docs/real-pc-test.md](docs/real-pc-test.md).
+Streaming uses [Sunshine](https://github.com/LizardByte/Sunshine) on the host
+and [Moonlight](https://moonlight-stream.org) on the player for now.
+
+| Binary | Runs on | Does |
+| --- | --- | --- |
+| `fogplay-server` | a server | The control plane API |
+| `fogplay-agent` | host PC, next to Sunshine | Registers the PC, sends heartbeats, accepts bookings, pairs Moonlight, unpairs it after the session |
+| `fogplay` | player PC, next to Moonlight | `register`, `login`, `games`, `play GAME` |
+
 ## Run it
 
 ```sh
@@ -19,7 +29,7 @@ Or run the API from source against containerised dependencies:
 make deps
 DATABASE_URL=postgres://fogplay:fogplay@localhost:5432/fogplay?sslmode=disable \
 JWT_SECRET=dev-only-secret-change-me-0123456789 \
-go run ./cmd/fogplay
+go run ./cmd/fogplay-server
 ```
 
 | Variable | Default | Notes |
@@ -60,6 +70,7 @@ All endpoints except register and login take `Authorization: Bearer <token>`.
 | GET | `/v1/sessions/{id}` | player, host owner | One session |
 | PUT | `/v1/sessions/{id}/state` | player, host owner | `{state, reason}`: `connecting`, `active`, `ended`, `failed` |
 | DELETE | `/v1/sessions/{id}` | player, host owner | End the session |
+| GET (WebSocket) | `/v1/sessions/{id}/signal` | player, host owner | Relay messages to the other side of a live session |
 
 ### Sessions
 
@@ -83,11 +94,29 @@ curl -s -X PUT localhost:8080/v1/hosts/$HOST/status -H "Authorization: Bearer $T
 curl -s localhost:8080/v1/games -H "Authorization: Bearer $TOKEN"
 ```
 
+### Signaling
+
+`/v1/sessions/{id}/signal` relays JSON messages `{type, data}` between the
+session's player and host; the server adds `from`. Messages sent before the
+other side connects are queued. The relay closes when the session ends. The
+hub is in memory, so run a single server instance for now.
+
+The Moonlight flow uses three messages: the host sends `host-info` (address,
+app), the player sends `pair-pin` (a random PIN Moonlight pairs with), and the
+host answers `pair-result` once Sunshine has accepted it.
+
 ## Layout
 
 ```
-cmd/fogplay        entrypoint
+cmd/fogplay-server server entrypoint
+cmd/fogplay-agent  host agent
+cmd/fogplay        player CLI
 internal/api       HTTP handlers and auth middleware
+internal/signal    WebSocket relay hub
+internal/client    Go API client
+internal/agent     host agent logic and Sunshine API client
+internal/player    player session flow and Moonlight runner
+internal/e2e       full-flow tests with fake Sunshine and Moonlight
 internal/auth      password hashing, JWT
 internal/store     Postgres queries
 internal/presence  Redis heartbeats with TTL
@@ -99,6 +128,6 @@ internal/db        pool and embedded SQL migrations
 
 1. ~~Skeleton~~ and ~~accounts, hosts, heartbeats, catalog~~
 2. ~~Sessions and matching: session API, state machine, latency-based host pick~~
-3. Signaling: WebSocket relay for SDP and ICE, coturn
-4. Host agent: Go daemon that wraps Sunshine
+3. ~~Signaling relay, host agent, player CLI with Sunshine + Moonlight~~
+4. Own WebRTC streaming in the client, coturn for NAT traversal
 5. Metering, then payments and host payouts
